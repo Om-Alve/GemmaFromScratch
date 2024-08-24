@@ -57,8 +57,9 @@ class GemmaRotaryEmbedding(nn.Module):
             self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
         )
         position_ids_expanded = position_ids[:, None, :].float()
-
-        with torch.autocast(device_type=x.device, enabled=False):
+        device_type = x.device.type
+        device_type = device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
+        with torch.autocast(device_type=device_type, enabled=False):
             freqs = (
                 inv_freq_expanded.float() @ position_ids_expanded.float()
             ).transpose(1, 2)
@@ -126,7 +127,7 @@ def repeat_kv(hidden_states: torch.Tensor, num_repeat: int):
         batch_size, num_key_value_heads, num_repeat, seq_len, head_dim
     )
 
-    return hidden_states.reshape(batch_size, num_key_value_heads * num_repeat, head_dim)
+    return hidden_states.reshape(batch_size, num_key_value_heads * num_repeat, seq_len, head_dim)
 
 
 class GemmaAttention(nn.Module):
@@ -138,24 +139,24 @@ class GemmaAttention(nn.Module):
         self.num_attention_heads = config.num_attention_heads
         self.num_key_value_heads = config.num_key_value_heads
         self.head_dim = config.head_dim
-        self.num_key_value_groups = self.num_attention_heads // self.num_key_value_heads
+        self.num_key_value_groups = self.num_attention_heads // self.num_key_value_heads 
         self.is_causal = True
 
         self.q_proj = nn.Linear(
-            self.hidden_size, self.hidden_size, bias=config.attention_bias
+            self.hidden_size, self.num_attention_heads * self.head_dim, bias=False
         )
         self.k_proj = nn.Linear(
             self.hidden_size,
             self.num_key_value_heads * self.head_dim,
-            bias=config.attention_bias,
+            bias=False,
         )
         self.v_proj = nn.Linear(
             self.hidden_size,
-            self.num_attention_heads * self.head_dim,
-            bias=config.attention_bias,
+            self.num_key_value_heads * self.head_dim,
+            bias=False,
         )
         self.o_proj = nn.Linear(
-            self.hidden_size, self.hidden_size, bias=config.attention_bias
+            self.num_attention_heads * self.head_dim, self.hidden_size, bias=False
         )
         self.rotary_embeddings = GemmaRotaryEmbedding(
             self.head_dim,
@@ -196,7 +197,7 @@ class GemmaAttention(nn.Module):
             k, v = kv_cache.update(k, v, self.layer_idx)
 
         k = repeat_kv(k, self.num_key_value_groups)
-        v = repeat_kv(k, self.num_key_value_groups)
+        v = repeat_kv(v, self.num_key_value_groups)
 
         attn_weights = torch.matmul(q, k.transpose(2, 3)) / (self.head_dim**0.5)
 
@@ -208,7 +209,6 @@ class GemmaAttention(nn.Module):
         attn_weights = nn.functional.dropout(
             attn_weights, p=self.config.attention_dropout, training=self.training
         )
-
         attn_output = torch.matmul(attn_weights, v)
 
         attn_output = attn_output.transpose(1, 2).contiguous()
@@ -317,10 +317,10 @@ class GemmaModel(nn.Module):
         self.embed_tokens = nn.Embedding(
             self.vocab_size, self.hidden_size, self.pad_token_id
         )
-        self.layers = [
+        self.layers = nn.ModuleList([
             GemmaDecoderLayer(config, layer_idx)
             for layer_idx in range(config.num_hidden_layers)
-        ]
+        ])
         self.norm = GemmaRMSNorm(self.hidden_size, rms_norm_eps=config.rms_norm_eps)
 
     def forward(
@@ -331,7 +331,7 @@ class GemmaModel(nn.Module):
         kv_cache: KVCache,
     ):
         embeds = self.embed_tokens(input_ids)
-
+        # print(embeds.shape)
         hidden_states = embeds * self.config.hidden_size**0.5
 
         for layer in self.layers:
@@ -352,10 +352,11 @@ class GemmaForCausalLM(nn.Module):
 
         self.config = config
 
-        self.model = self.GemmaModel(config)
+        self.model = GemmaModel(config)
         self.lm_head = nn.Linear(
             self.config.hidden_size, self.config.vocab_size, bias=False
         )
+    def tie_weights(self):
         self.lm_head.weight = self.model.embed_tokens.weight
 
     def forward(
@@ -368,7 +369,7 @@ class GemmaForCausalLM(nn.Module):
 
         outputs = self.model(
             input_ids=input_ids,
-            attention_masks=attention_mask,
+            attention_mask=attention_mask,
             position_ids=position_ids,
             kv_cache=kv_cache,
         )
