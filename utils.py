@@ -7,7 +7,6 @@ import os
 import torch
 from gemma import GemmaConfig, GemmaForCausalLM, KVCache
 
-
 def load_model(model_path: str, device: str) -> Tuple[GemmaForCausalLM, AutoTokenizer]:
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, padding_side="right")
