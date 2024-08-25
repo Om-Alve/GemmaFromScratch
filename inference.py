@@ -41,10 +41,11 @@ def inference(
         generated_tokens.append(next_token.item())
         if next_token.item() == stop_token:
             break
-        input_ids = next_token.unsqueeze(-1)
-        attention_mask = torch.cat(
-            [attention_mask, torch.ones((1, 1), device=input_ids.device)], dim=-1
+        inputs["input_ids"] = next_token.unsqueeze(-1)
+        inputs["attention_mask"] = torch.cat(
+            [inputs["attention_mask"], torch.ones((1, 1), device=device)], dim=-1
         )
+        inputs["position_ids"] = inputs["attention_mask"].cumsum(-1)
     generated_tokens = torch.cat(generated_tokens, dim=-1)
     decoded = tokenizer.decode(generated_tokens, skip_special_tokens=True)
 
@@ -53,7 +54,7 @@ def inference(
 
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model_path = "../gemma2b"
+    model_path = "../gemma-2b"
     print(f"Loading model")
     model, tokenizer = load_model(model_path, device)
     model = model.to(device).eval()
