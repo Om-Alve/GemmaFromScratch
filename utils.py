@@ -17,7 +17,7 @@ def load_model(model_path: str, device: str) -> Tuple[GemmaForCausalLM, AutoToke
     tensors = {}
 
     for safetensor_file in safetensor_files:
-        with safe_open(safetensor_file, framework="pt", device="cpu") as f:
+        with safe_open(safetensor_file, framework="pt", device=device) as f:
             for key in f.keys():
                 tensors[key] = f.get_tensor(key)
 
@@ -38,7 +38,7 @@ if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model, tokenizer = load_model(model_path, device)
     print("Model Loaded Successfully!")
-    prompt = "1 + 1 ="
+    prompt = "def bubblesort(arr):\n"
     inputs = tokenizer(prompt, return_tensors="pt")
     kv_cache = KVCache()
     inputs["position_ids"] = torch.cumsum(inputs["attention_mask"], dim=-1) - 1
