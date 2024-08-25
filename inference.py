@@ -4,16 +4,16 @@ from gemma import KVCache, GemmaForCausalLM
 from transformers import AutoTokenizer
 
 
-def move_to_device(inputs: dict, device: str):
+def move_to_device(inputs: dict, device: str) -> dict:
     return {k: v.to(device) for k, v in inputs.items()}
 
 
-def min_p_sampling(logits: torch.Tensor, p_base: float = 0.1):
+def min_p_sampling(logits: torch.Tensor, p_base: float = 0.1) -> torch.Tensor:
     p_max = logits.max(dim=-1, keepdim=True).values
     p_scaled = p_max * p_base
     mask = logits >= p_scaled
-    logits = logits * mask.float()  
-    logits = logits / logits.sum(dim=-1, keepdim=True)  
+    logits = logits * mask.float()
+    logits = logits / logits.sum(dim=-1, keepdim=True)
     next_token = torch.multinomial(logits, num_samples=1)
     return next_token.squeeze(-1)
 
@@ -54,7 +54,9 @@ def inference(
         inputs["attention_mask"] = torch.cat(
             [inputs["attention_mask"], torch.ones((1, 1), device=device)], dim=-1
         )
-        inputs["position_ids"] = inputs["attention_mask"].cumsum(dim=-1)[:, -1].unsqueeze(0)
+        inputs["position_ids"] = (
+            inputs["attention_mask"].cumsum(dim=-1)[:, -1].unsqueeze(0)
+        )
 
     generated_tokens = torch.cat(generated_tokens, dim=-1)
     decoded = tokenizer.decode(generated_tokens, skip_special_tokens=False)

@@ -7,6 +7,7 @@ import os
 import torch
 from gemma import GemmaConfig, GemmaForCausalLM, KVCache
 
+
 def load_model(model_path: str, device: str) -> Tuple[GemmaForCausalLM, AutoTokenizer]:
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, padding_side="right")
@@ -38,28 +39,28 @@ if __name__ == "__main__":
     model, tokenizer = load_model(model_path, device)
     print("Model Loaded Successfully!")
     prompt = "1 + 1 ="
-    inputs = tokenizer(prompt, return_tensors='pt')
+    inputs = tokenizer(prompt, return_tensors="pt")
     kv_cache = KVCache()
-    inputs['position_ids'] = torch.cumsum(inputs['attention_mask'],dim=-1) - 1
+    inputs["position_ids"] = torch.cumsum(inputs["attention_mask"], dim=-1) - 1
     print(inputs)
     out = model(**inputs, kv_cache=kv_cache)
-    kv_cache = out['kv_cache']
-    logits = out['logits'][:,-1,:]
+    kv_cache = out["kv_cache"]
+    logits = out["logits"][:, -1, :]
     print(logits.shape)
     logits = logits.argmax(dim=-1)
     print(logits)
     print(tokenizer.decode(logits))
-    kv_cache = out['kv_cache']
-    inputs['input_ids'] = logits.unsqueeze(0)
-    inputs['attention_mask'] = torch.cat([inputs['attention_mask'], torch.ones(1,1)], dim=-1)
-    inputs['position_ids'] = inputs['attention_mask'].cumsum(-1)[:,-1].unsqueeze(0)
+    kv_cache = out["kv_cache"]
+    inputs["input_ids"] = logits.unsqueeze(0)
+    inputs["attention_mask"] = torch.cat(
+        [inputs["attention_mask"], torch.ones(1, 1)], dim=-1
+    )
+    inputs["position_ids"] = inputs["attention_mask"].cumsum(-1)[:, -1].unsqueeze(0)
     print(inputs)
     out = model(**inputs, kv_cache=kv_cache)
-    kv_cache = out['kv_cache']
-    logits = out['logits'][:,-1,:]
+    kv_cache = out["kv_cache"]
+    logits = out["logits"][:, -1, :]
     print(logits.shape)
     logits = logits.argmax(dim=-1)
     print(logits)
     print(tokenizer.decode(logits))
-
-

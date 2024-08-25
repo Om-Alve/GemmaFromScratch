@@ -3,6 +3,7 @@ import torch.nn as nn
 from typing import List, Tuple, Dict, Optional
 import math
 
+
 class GemmaConfig:
     def __init__(
         self,
@@ -50,7 +51,9 @@ class GemmaRotaryEmbedding(nn.Module):
         self.register_buffer("inv_freq", tensor=inv_freq, persistent=False)
 
     @torch.no_grad()
-    def forward(self, x, position_ids):
+    def forward(
+        self, x: torch.Tensor, position_ids: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         self.inv_freq.to(x.device)
 
         inv_freq_expanded = (
@@ -58,7 +61,11 @@ class GemmaRotaryEmbedding(nn.Module):
         )
         position_ids_expanded = position_ids[:, None, :].float()
         device_type = x.device.type
-        device_type = device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
+        device_type = (
+            device_type
+            if isinstance(device_type, str) and device_type != "mps"
+            else "cpu"
+        )
         with torch.autocast(device_type=device_type, enabled=False):
             freqs = (
                 inv_freq_expanded.float() @ position_ids_expanded.float()
@@ -72,13 +79,19 @@ class GemmaRotaryEmbedding(nn.Module):
         return cos.to(x.dtype), sin.to(x.dtype)
 
 
-def rotate_half(x):
+def rotate_half(x: torch.Tensor) -> torch.Tensor:
     x1 = x[..., : x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2 :]
     return torch.cat((-x2, x1), dim=-1)
 
 
-def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
+def apply_rotary_pos_emb(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    unsqueeze_dim: int = 1,
+):
     cos = cos.unsqueeze(unsqueeze_dim)
     sin = sin.unsqueeze(unsqueeze_dim)
 
@@ -119,7 +132,7 @@ class KVCache:
         return self.key_cache[layer_idx], self.value_cache[layer_idx]
 
 
-def repeat_kv(hidden_states: torch.Tensor, num_repeat: int):
+def repeat_kv(hidden_states: torch.Tensor, num_repeat: int) -> torch.Tensor:
     batch_size, num_key_value_heads, seq_len, head_dim = hidden_states.shape
     if num_repeat == 1:
         return hidden_states
@@ -127,7 +140,9 @@ def repeat_kv(hidden_states: torch.Tensor, num_repeat: int):
         batch_size, num_key_value_heads, num_repeat, seq_len, head_dim
     )
 
-    return hidden_states.reshape(batch_size, num_key_value_heads * num_repeat, seq_len, head_dim)
+    return hidden_states.reshape(
+        batch_size, num_key_value_heads * num_repeat, seq_len, head_dim
+    )
 
 
 class GemmaAttention(nn.Module):
@@ -139,7 +154,7 @@ class GemmaAttention(nn.Module):
         self.num_attention_heads = config.num_attention_heads
         self.num_key_value_heads = config.num_key_value_heads
         self.head_dim = config.head_dim
-        self.num_key_value_groups = self.num_attention_heads // self.num_key_value_heads 
+        self.num_key_value_groups = self.num_attention_heads // self.num_key_value_heads
         self.is_causal = True
 
         self.q_proj = nn.Linear(
@@ -170,7 +185,7 @@ class GemmaAttention(nn.Module):
         attention_mask: torch.Tensor,
         position_ids: torch.Tensor,
         kv_cache: KVCache,
-    ):
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         batch_size, seq_len, _ = hidden_states.shape
 
         q = (
@@ -227,10 +242,10 @@ class GemmaRMSNorm(nn.Module):
         self.rms_norm_eps = rms_norm_eps
         self.weight = nn.Parameter(torch.zeros(self.dim_size))
 
-    def _normalize(self, x: torch.Tensor):
+    def _normalize(self, x: torch.Tensor) -> torch.Tensor:
         return x / torch.sqrt(x.pow(2).mean(-1, keepdim=True) + self.rms_norm_eps)
 
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
 
         x = self._normalize(x.float())
 
@@ -254,7 +269,7 @@ class GemmaMLP(nn.Module):
             config.hidden_size, config.intermediate_size, bias=False
         )
 
-    def forward(self, hidden_states: torch.Tensor):
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         out = nn.functional.gelu(
             self.gate_proj(hidden_states), approximate="tanh"
         ) * self.up_proj(hidden_states)
@@ -282,7 +297,7 @@ class GemmaDecoderLayer(nn.Module):
         attention_mask: torch.Tensor,
         position_ids: torch.Tensor,
         kv_cache: KVCache,
-    ):
+    ) -> torch.Tensor:
         residual = hidden_states
 
         hidden_states = self.input_layernorm(hidden_states)
@@ -314,8 +329,15 @@ class GemmaModel(nn.Module):
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
 
-        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
-        self.layers = nn.ModuleList([GemmaDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)])
+        self.embed_tokens = nn.Embedding(
+            config.vocab_size, config.hidden_size, self.padding_idx
+        )
+        self.layers = nn.ModuleList(
+            [
+                GemmaDecoderLayer(config, layer_idx)
+                for layer_idx in range(config.num_hidden_layers)
+            ]
+        )
         self.norm = GemmaRMSNorm(config.hidden_size, rms_norm_eps=config.rms_norm_eps)
 
     def forward(
@@ -326,19 +348,21 @@ class GemmaModel(nn.Module):
         kv_cache: Optional[KVCache] = None,
     ) -> torch.Tensor:
         hidden_states = self.embed_tokens(input_ids)
-        hidden_states = hidden_states * (self.config.hidden_size ** 0.5)
+        hidden_states = hidden_states * (self.config.hidden_size**0.5)
 
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
-        
+
         if attention_mask.dim() == 2:
             attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
 
         dtype, device = hidden_states.dtype, hidden_states.device
         q_len = hidden_states.shape[1]
-        
+
         if kv_cache is None or kv_cache.num_items() == 0:
-            causal_mask = torch.triu(torch.full((q_len, q_len), float('-inf'), device=device), diagonal=1)
+            causal_mask = torch.triu(
+                torch.full((q_len, q_len), float("-inf"), device=device), diagonal=1
+            )
         else:
             assert q_len == 1, "q_len should be 1 when using KV cache"
             kv_len = kv_cache.num_items() + q_len
@@ -354,6 +378,7 @@ class GemmaModel(nn.Module):
 
         hidden_states = self.norm(hidden_states)
         return hidden_states
+
 
 class GemmaForCausalLM(nn.Module):
     def __init__(self, config: GemmaConfig):
