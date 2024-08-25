@@ -38,14 +38,14 @@ def inference(
             pass
         else:
             next_token = logits.argmax(dim=-1)
-        generated_tokens.append(next_token.item())
+        generated_tokens.append(next_token)
         if next_token.item() == stop_token:
             break
         inputs["input_ids"] = next_token.unsqueeze(-1)
         inputs["attention_mask"] = torch.cat(
             [inputs["attention_mask"], torch.ones((1, 1), device=device)], dim=-1
         )
-        inputs["position_ids"] = inputs["attention_mask"].cumsum(-1)
+        inputs["position_ids"] = inputs["attention_mask"].cumsum(-1)[:,-1].unsqueeze(0)
     generated_tokens = torch.cat(generated_tokens, dim=-1)
     decoded = tokenizer.decode(generated_tokens, skip_special_tokens=True)
 
@@ -61,7 +61,7 @@ if __name__ == "__main__":
 
     prompt = "Hello My name is"
 
-    max_new_tokens = 256
+    max_new_tokens = 10
 
     top_p = 0.7
 

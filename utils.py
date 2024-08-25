@@ -34,19 +34,33 @@ def load_model(model_path: str, device: str) -> Tuple[GemmaForCausalLM, AutoToke
 
 if __name__ == "__main__":
 
-    model_path = "../gemma-2-2b"
+    model_path = "../gemma-2b"
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model, tokenizer = load_model(model_path, device)
     print("Model Loaded Successfully!")
-    inputs = tokenizer("Hello world", return_tensors='pt')
+    prompt = "1 + 1 ="
+    inputs = tokenizer(prompt, return_tensors='pt')
     kv_cache = KVCache()
     inputs['position_ids'] = torch.cumsum(inputs['attention_mask'],dim=-1) - 1
     print(inputs)
     out = model(**inputs, kv_cache=kv_cache)
     kv_cache = out['kv_cache']
-    logits = out['logits']
+    logits = out['logits'][:,-1,:]
     print(logits.shape)
     logits = logits.argmax(dim=-1)
     print(logits)
-    # print(tokenizer.decode(logits))
+    print(tokenizer.decode(logits))
+    kv_cache = out['kv_cache']
+    inputs['input_ids'] = logits.unsqueeze(0)
+    inputs['attention_mask'] = torch.cat([inputs['attention_mask'], torch.ones(1,1)], dim=-1)
+    inputs['position_ids'] = inputs['attention_mask'].cumsum(-1)[:,-1].unsqueeze(0)
+    print(inputs)
+    out = model(**inputs, kv_cache=kv_cache)
+    kv_cache = out['kv_cache']
+    logits = out['logits'][:,-1,:]
+    print(logits.shape)
+    logits = logits.argmax(dim=-1)
+    print(logits)
+    print(tokenizer.decode(logits))
+
 

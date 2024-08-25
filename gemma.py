@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
-from typing import List, Tuple, Dict
-
+from typing import List, Tuple, Dict, Optional
+import math
 
 class GemmaConfig:
     def __init__(
@@ -94,7 +94,7 @@ class KVCache:
         self.key_cache = []
         self.value_cache = []
 
-    def num_item(self) -> int:
+    def num_items(self) -> int:
         if len(self.key_cache) == 0:
             return 0
         else:
@@ -311,62 +311,67 @@ class GemmaModel(nn.Module):
     def __init__(self, config: GemmaConfig):
         super().__init__()
         self.config = config
+        self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
-        self.hidden_size = config.hidden_size
-        self.pad_token_id = config.pad_token_id
-        self.embed_tokens = nn.Embedding(
-            self.vocab_size, self.hidden_size, self.pad_token_id
-        )
-        self.layers = nn.ModuleList([
-            GemmaDecoderLayer(config, layer_idx)
-            for layer_idx in range(config.num_hidden_layers)
-        ])
-        self.norm = GemmaRMSNorm(self.hidden_size, rms_norm_eps=config.rms_norm_eps)
+
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
+        self.layers = nn.ModuleList([GemmaDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)])
+        self.norm = GemmaRMSNorm(config.hidden_size, rms_norm_eps=config.rms_norm_eps)
 
     def forward(
         self,
         input_ids: torch.LongTensor,
-        attention_mask: torch.Tensor,
-        position_ids: torch.LongTensor,
-        kv_cache: KVCache,
-    ):
-        embeds = self.embed_tokens(input_ids)
-        # print(embeds.shape)
-        hidden_states = embeds * self.config.hidden_size**0.5
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        kv_cache: Optional[KVCache] = None,
+    ) -> torch.Tensor:
+        hidden_states = self.embed_tokens(input_ids)
+        hidden_states = hidden_states * (self.config.hidden_size ** 0.5)
 
-        for layer in self.layers:
-            hidden_states = layer(
-                hidden_states=hidden_states,
-                attention_mask=attention_mask,
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
+        
+        if attention_mask.dim() == 2:
+            attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+
+        dtype, device = hidden_states.dtype, hidden_states.device
+        q_len = hidden_states.shape[1]
+        
+        if kv_cache is None or kv_cache.num_items() == 0:
+            causal_mask = torch.triu(torch.full((q_len, q_len), float('-inf'), device=device), diagonal=1)
+        else:
+            assert q_len == 1, "q_len should be 1 when using KV cache"
+            kv_len = kv_cache.num_items() + q_len
+            causal_mask = torch.full((q_len, kv_len), 0, dtype=dtype, device=device)
+
+        for decoder_layer in self.layers:
+            hidden_states = decoder_layer(
+                hidden_states,
+                attention_mask=causal_mask.unsqueeze(0).unsqueeze(0),
                 position_ids=position_ids,
                 kv_cache=kv_cache,
             )
+
         hidden_states = self.norm(hidden_states)
-
         return hidden_states
-
 
 class GemmaForCausalLM(nn.Module):
     def __init__(self, config: GemmaConfig):
         super().__init__()
-
         self.config = config
-
         self.model = GemmaModel(config)
-        self.lm_head = nn.Linear(
-            self.config.hidden_size, self.config.vocab_size, bias=False
-        )
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+
     def tie_weights(self):
         self.lm_head.weight = self.model.embed_tokens.weight
 
     def forward(
         self,
         input_ids: torch.LongTensor,
-        attention_mask: torch.FloatTensor,
-        position_ids: torch.LongTensor,
-        kv_cache: KVCache,
-    ):
-
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        kv_cache: Optional[KVCache] = None,
+    ) -> Dict[str, torch.Tensor]:
         outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -375,10 +380,10 @@ class GemmaForCausalLM(nn.Module):
         )
 
         logits = self.lm_head(outputs)
+        logits = logits.float()
 
-        out = {"logits": logits}
-
+        return_data = {"logits": logits}
         if kv_cache is not None:
-            out["kv_cache"] = kv_cache
+            return_data["kv_cache"] = kv_cache
 
-        return out
+        return return_data
